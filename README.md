@@ -1,4 +1,7 @@
-# lipidomics report
+# Plasma lipidomics analysis
+ 
+We're using the same structure as the report but we're going to make a load of changes.
+
 
 This project contains code to generate an html report for lipidomics data. It requires one data file and one metadata file. The wrapper script generate_report.R is the only code that the user should need to interact with.
 To run the code and create a report, open the generate_report.R script and follow the instructions.
