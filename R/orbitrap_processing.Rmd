@@ -6,30 +6,19 @@ output:
     keep_md: false
 output_file: lip
 params: 
-  #metadata_file: ../data/metadata.txt
-  #input_file: ../data/alldata.lipidomics_summary_test_data.tsv
-  input_file: D:/projects/lipidomics/example_data/CSC/datasets/alldata.lipidomics_summary_MiaPaca2_Parental-CSC.csv
-  metadata_file: D:/projects/lipidomics/example_data/CSC/metadata_4_reps.txt
-  #meta_info: NULL 
+  metadata_file: ../data/metadata.txt
+  input_file: ../data/molecular_species_data_SRM_AA_T1D.csv
   meta_sample_name: SampleName
   meta_condition_type: Type
   meta_rep: Rep
   lipid_name_col: X1
-  #paired: TRUE
   paired: FALSE
   quick_test: TRUE
   output_folder: out
   bar_class_ylabel: value
-  #control: Control
-  control: Parental
-  #interactive: TRUE
+  control: SRM
 
 ---
-
-<p style="font-size: 11px";>
-This report aims to present lipid data in relation to the different conditions with which they are associated. It is not a definitive analysis of the data but rather an introduction to it.  
-Lipid data tends to be log-normal so, prior to statistical analyses, the data were log transformed to meet the assumptions of the tests. However, such transformation may not be suitable for all classes/species so the p-values should always be interpreted after careful graphical exploration of the data.
-</p>
 
 ```{r setup, include=FALSE}
 library(knitr)
@@ -51,6 +40,9 @@ all_data <- switch(tools::file_ext(params$input_file),
 )
 
 meta_info <- process_metadata(metadata_file = params$metadata_file, control = params$control)
+
+exp_conditions <- pull(distinct(meta_info, condition))
+
 ```
 
 ```{r checks, include = FALSE}
@@ -93,24 +85,43 @@ tidy_data <- all_data %>%
   tidyr::pivot_longer(cols = -lipid_name, names_to = "sample_name") %>%
   replace(is.na(.), 0) %>%
   tidyr::separate(lipid_name, sep = " ", into = c("class", NA), remove = FALSE) %>%
-  left_join(meta_type) %>%
-  dplyr::mutate(log2_value = log2(value)) %>%
-  dplyr::mutate(log2_value = if_else(log2_value == "-Inf", 0, log2_value)) # we don't want -Inf values
-
-exp_conditions <- unique(pull(tidy_data, condition))
-exp_conditions <- exp_conditions[1:2] # this script can only deal with 2 conditions
-exp_conditions <- c(exp_conditions[exp_conditions != params$control], params$control)
-assertthat::assert_that(length(exp_conditions) == 2, msg = "Number of experimental conditions doesn't equal 2")
-
-meta_type <- meta_type %>%
-  filter(condition %in% exp_conditions)
-
-tidy_data <- tidy_data %>%
-  filter(condition %in% exp_conditions)
-
+  left_join(meta_type) 
 ```
 
-```{r process_bar_data}
+# Checking skew  
+
+Skewness > 1 suggests positive skew which suggests log-normality.  
+One way to check it out is to look at the minimum skewness.value.
+
+```{r}
+tidy_data %>%
+  group_by(condition, sample_name) %>%
+  summarise(skew.value = PerformanceAnalytics::skewness(value)) %>%
+  rstatix::get_summary_stats(skew.value) %>%
+  DT::datatable(rownames = FALSE, options = list(dom = "t"))
+```
+
+All minimum skewness values are well above 1 so we'll log transform the data.
+
+```{r}
+tidy_data <- tidy_data %>%
+  dplyr::mutate(log2_value = log2(value)) %>%
+  na_if("-Inf")
+  #dplyr::mutate(log2_value = if_else(log2_value == "-Inf", 0, log2_value)) # we don't want -Inf values
+```
+
+Check whether the log transformation has improved the skew values.
+```{r}
+tidy_data %>%
+  group_by(condition, sample_name) %>%
+  summarise(log.skew.value = PerformanceAnalytics::skewness(log2_value)) %>%
+  rstatix::get_summary_stats(log.skew.value) %>%
+  DT::datatable(rownames = FALSE, options = list(dom = "t"))
+```
+The max skew values are all below 1, so we'll continue with the log transformed data.
+
+
+```{r process_bar_data, eval = FALSE}
 # this needs to be done here, not in the bar_plot Rmd file, so that it is only 
 # run once
 dodge_width <- 0.8
@@ -129,175 +140,26 @@ bar_data_linear_median <- tidy_data %>%
   
 ```
 
-```{r calculate_stats_individual_lipids}
-# for calculating the stats per individual lipid - functions are in stats.R 
-long_stats_pvals <- do_stats(tidy_data, params$paired)
 
-# multiple testing correction - by class for now.
-long_stats_pvals <- long_stats_pvals %>%
-  select(lipid_name, class, p_val) %>%
-  distinct() %>%
-  drop_na() %>% # so we're not overcorrecting
-  group_by(class) %>%
-  mutate(adj_pval = p.adjust(p_val, method = "BH")) %>%
-  ungroup() %>%
-  right_join(long_stats_pvals)
+```{r anova}
 
-fc <- tidy_data %>%
-  dplyr::group_by(lipid_name, condition) %>%
-  dplyr::summarise(log2_mean = mean(log2_value)) %>%
-  ungroup() %>%
-  pivot_wider(names_from = condition, names_prefix = "log2_mean_", values_from = log2_mean) %>%
-  mutate(log2_fc = .data[[paste0("log2_mean_", exp_conditions[1])]] - .data[[paste0("log2_mean_", exp_conditions[2])]])
+#### We need to use anova_test but we need to remove the species with too many the NA first: na> 3? ###
+anova_test_res <- tidy_data %>%
+    rstatix::anova_test(log2_value ~ condition)
 
+#tidy_data %>%
+#  summarise(non_na_count = sum(is.na(log2_value)))
 
-stats_pvals <- long_stats_pvals %>%
-  select(class, lipid_name, test_type, p_val, adj_pval) %>%
-  distinct() %>%
-  right_join(fc)
-
-summary_table_data <- stats_pvals %>%
-  select(-p_val)
-
-cols_to_round <- summary_table_data %>%
-  dplyr::select(all_of(c(contains("mean"), contains("FC")))) %>%
-  colnames()
-pvals_to_round <- summary_table_data %>%
-  dplyr::select(all_of(c(contains("pval")))) %>%
-  colnames()
-
-two_sample_t_test_lipids <- stats_pvals %>%
-  filter(test_type %in% c("independent_t_test", "paired_t_test")) %>%
-  select(lipid_name) %>%
-  distinct() %>%
-  pull()
 ```
 
 
-```{r process_forest_data}
-# all the data is log transformed for the forest plots
-conditions <- unique(pull(tidy_data, condition))
-
-abundance_data <- bar_data_linear_median %>%
-  select(lipid_name, abundance) %>%
-  distinct()
-
-mean_log2 <- tidy_data %>%
-  dplyr::group_by(lipid_name, condition) %>%
-  dplyr::summarise(
-    mean = mean(log2_value), 
-  ) %>%
-  ungroup() %>%
-  pivot_wider(names_from = condition, values_from = mean) %>%
-  mutate(ratio = .data[[exp_conditions[1]]] - .data[[exp_conditions[2]]])
-
-# the p-values should match those in the summary table/individual lipids. It's easier doing the stats separately
-# here as we need some of the t-statistic values for the forest plot. Then afterwards, we filter for the lipids
-# that met test assumptions. The multiple testing correction is probably a bit harsh though - we're currently
-# including the lipids with "none" tests. 
-# 
-t_test_res <- tidy_data %>%
-  group_by(class, lipid_name) %>%
-  select(class, lipid_name, condition, log2_value) %>%
-  rstatix::t_test(log2_value ~ condition, paired = params$paired) %>%
-  ungroup() %>%
-  group_by(class) %>%
-  mutate(padj = p.adjust(p, method="BH")) %>%
-  ungroup() %>%
-  mutate(tadj = qt(padj/2, df)) %>%
-  left_join(mean_log2) %>%
-  mutate(SE = abs(ratio/tadj), lower.limit=ratio-1.96*SE, upper.limit=ratio+1.96*SE) %>%
-  left_join(abundance_data) %>%
-  filter(lipid_name %in% two_sample_t_test_lipids) 
-```
-
-# {.tabset .tabset-pills}
-
-## 1. Summary
+## Summary
 
 ```{r, child='summary_plots.Rmd'}
 ```
 
 
-## 2. Class plots
-
-### Bar plot information
-The bar plots show linear median values for each condition within each lipid subclass. They are split between low and high abundance values, where low abundance refers to lipid subclasses with a median 
-value < 1 in either condition.
-The points show each individual value.
-   
-### Forest plot information    
-The plots on the right show log2 ratios between the 2 conditions, the red point 
-shows the ratio while the lines show the confidence interval. If the confidence 
-interval does not span over 0, the difference between the 2 conditions for that 
-particular species will be significant.  
-Subclasses that did not fit the assumptions for t_tests may not be shown in these plots.
-  
-
-```{r}
-# for if there are loads and we want a link to the plot further down the page
-lipid_classes <- unique(tidy_data$class)
-class_link <- function(class){
-  paste0("<a href=", "\"", paste0("#", tolower(class)), "\">", class, "</a>")
-}  
-```
-  
-#### `r purrr::map_chr(lipid_classes, class_link)`
-   
-```{r, results = "asis"}
-res <- lapply(lipid_classes, function(lipid_class) {
-  knitr::knit_child(
-    "bar_plots.Rmd", envir = environment(), quiet = TRUE
-  )
-})
-cat(unlist(res), sep = '\n')
-```
-
-## 3. Individual lipids
-
-#### Scroll down to browse plots for individual lipids or click on the name in the table below to navigate directly to the plot.
-
-```{r}
-# function to create a link in this format '<a href="#pc-280">PC 28:0</a>'
-get_link <- function(lipid){
-  temp <- gsub(" ", "-", x = tolower(lipid))
-  part1 <- paste0("#", gsub(":", "", temp))
-  paste0("<a href=", "\"", part1, "\">", lipid, "</a>")
-}
-
-summary_table_data %>%
-  dplyr::mutate(lipid_name = get_link(lipid_name)) %>%
-  DT::datatable(
-    rownames = FALSE, 
-    options = list(pageLength = 10, dom = "tlip"), 
-    filter = list(position = "top"),
-    escape = FALSE
-    ) %>%
-  DT::formatRound(digits = 3, cols_to_round) %>%
-  DT::formatRound(digits = 5, pvals_to_round)
-
-```
-
-```{r}
-out_file <- paste0(params$output_folder, "/data_table.csv") 
-readr::write_csv(stats_pvals, file = out_file) 
-```
-
-```{r, results = "asis"}
-lipids_for_plotting <- unique(tidy_data$lipid_name)
-  
-if(params$quick_test) lipids_for_plotting <- lipids_for_plotting[1:3]
-
-res <- lapply(lipids_for_plotting, function(lipid_to_plot) {
-  knitr::knit_child(
-    "child_plots.Rmd", envir = environment(), quiet = TRUE
-  )
-})
-cat(unlist(res), sep = '\n')
-
-```
-  
-## 4. Experimental info
+## Experimental info
 
 <div class = "row">
 <div class = "col-md-6">

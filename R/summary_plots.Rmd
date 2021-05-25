@@ -2,7 +2,7 @@
 # requires the all_data df
 ```
 
-```{r}
+```{r, include=FALSE}
 totals <- tidy_data %>%
   group_by(class, condition) %>%
   summarise(total = sum(value)) %>%
@@ -27,42 +27,30 @@ bar_totals_linear <- tidy_data %>%
   ) %>%
   ungroup()
 
-bar_totals_log2 <- tidy_data %>%
-  group_by(class, condition, sample_name) %>%
-  dplyr::summarise(total = sum(log2_value)) %>%
+mean_totals_percent <- bar_totals_linear %>%
+  group_by(condition) %>%
+  summarise(total = sum(mean_total)) %>%
   ungroup() %>%
-  group_by(class, condition) %>%
-  dplyr::summarise(
-    mean_total = mean(total),
-    se_total = sd(total)/sqrt(dplyr::n())
-  ) %>%
-  ungroup()
+  left_join(bar_totals_linear) %>%
+  mutate(percent = (mean_total/total)*100) %>%
+  group_by(class) %>%
+  mutate(max_percent = max(percent)) %>%
+  ungroup() %>%
+  mutate(pie_class = if_else(max_percent > 1, class, "other"))
 
-mean_log2_class <- tidy_data %>%
-  dplyr::group_by(class, condition) %>%#, sample_name) %>%
-  dplyr::summarise(
-    mean = mean(log2_value), 
-  ) %>%
-  ungroup() %>%
-  pivot_wider(names_from = condition, values_from = mean) %>%
-  mutate(ratio = .data[[exp_conditions[1]]] - .data[[exp_conditions[2]]])
+# bar_totals_log2 <- tidy_data %>%
+#   group_by(class, condition, sample_name) %>%
+#   dplyr::summarise(total = sum(log2_value)) %>%
+#   ungroup() %>%
+#   group_by(class, condition) %>%
+#   dplyr::summarise(
+#     mean_total = mean(total),
+#     se_total = sd(total)/sqrt(dplyr::n())
+#   ) %>%
+#   ungroup()
 ```
 
-```{r}
-t_test_by_class <- tidy_data %>%
-  group_by(class) %>%#, condition, sample_name) %>%
-  select(class, sample_name, condition, log2_value) %>%
-  rstatix::t_test(log2_value ~ condition, paired = params$paired) %>%
-  ungroup() %>%
-  mutate(padj = p.adjust(p, method="BH")) %>%
-  ungroup() %>%
-  mutate(tadj = qt(padj/2, df)) %>%
-  left_join(mean_log2_class) %>%
-  mutate(SE = abs(ratio/tadj), lower.limit=ratio-1.96*SE, upper.limit=ratio+1.96*SE) 
-
-```
-
-<hr class="style2">  
+  <hr class="style2">  
 
 ### Summary of total amounts across all samples
 
@@ -71,37 +59,27 @@ The pie charts show the proportion of lipid types in the samples. Any that compr
 The full set and values can be found in the table below.  
 The plots and table show total summed values across all replicates.
 
-```{r, out.width=c('50%', '50%'), fig.show='hold', fig.height = 7}
+```{r, out.width=c('33%', '33%', '33%'), fig.show='hold', fig.height = 8}
 pie_data <- totals %>%
   select(pie_class, percent, condition) %>%
   group_by(pie_class, condition) %>%
   summarise(total_pie_percent = sum(percent)) %>%
   ungroup()
 
-pie_cond1 <- pie_data %>%
-  filter(condition == exp_conditions[1])
+n_col <- n_distinct(select(pie_data, pie_class))
 
-pie_cond2 <- pie_data %>%
-  filter(condition == exp_conditions[2])
-
-n_col <- nrow(pie_cond1)
-
-pie(
-  pie_cond1$total_pie_percent, 
-  labels=pie_cond1$pie_class, 
-  col=rainbow(n_col),
-  main = exp_conditions[1]
-)
-pie(
-  pie_cond2$total_pie_percent, 
-  labels=pie_cond2$pie_class, 
-  col=rainbow(n_col),
-  main = exp_conditions[2]
+for (this_condition in unique(pie_data$condition)){
+  #print(this_condition)
+  one_pie <- filter(pie_data, condition == this_condition)
+  pie(
+    one_pie$total_pie_percent, 
+    labels = one_pie$pie_class, 
+    col = rainbow(n_col),
+    main = this_condition
   )
-```
+}
 
-<div class = "row">
-<div class = "col-md-7">
+```
 
 ### Total amounts
 ```{r}
@@ -112,32 +90,47 @@ totals %>%
   DT::datatable(
       rownames = FALSE, 
       options = list(pageLength = 10, dom = "tlip"), 
-     # filter = list(position = "top"),
       escape = FALSE
       ) %>%
-    DT::formatRound(digits = 2, 2:5) 
+    DT::formatRound(digits = 2, 2:7) 
 ```
-</div>
-<div class = "col-md-1">
-
-</div>
-<div class = "col-md-4">
-
 ### Mean of total amounts 
+ 
 ```{r}
-bar_totals_linear %>%
-  dplyr::arrange(desc(mean_total)) %>%
-  select(class, condition, mean_total) %>%
-  tidyr::pivot_wider(names_from = condition, values_from = c(mean_total)) %>%
+mean_totals_percent %>%
+  dplyr::arrange(desc(max_percent)) %>%
+  select(class, condition, mean_total, percent) %>%
+  tidyr::pivot_wider(names_from = condition, values_from = c(mean_total, percent)) %>%
   DT::datatable(
       rownames = FALSE, 
       options = list(pageLength = 10, dom = "tlip"), 
       escape = FALSE
       ) %>%
-    DT::formatRound(digits = 2, 2:3) 
+    DT::formatRound(digits = 2, 2:7) 
+
 ```
-</div>
-</div>
+
+```{r, out.width=c('33%', '33%', '33%'), fig.show='hold', fig.height = 8}
+pie_data <- mean_totals_percent %>%
+  select(pie_class, percent, condition) %>%
+  group_by(pie_class, condition) %>%
+  summarise(total_pie_percent = sum(percent)) %>%
+  ungroup()
+
+n_col <- n_distinct(select(pie_data, pie_class))
+
+for (this_condition in unique(pie_data$condition)){
+  #print(this_condition)
+  one_pie <- filter(pie_data, condition == this_condition)
+  pie(
+    one_pie$total_pie_percent, 
+    labels = one_pie$pie_class, 
+    col = rainbow(n_col),
+    main = this_condition
+  )
+}
+```
+
 
 <br><br>
 <hr>
@@ -145,30 +138,8 @@ bar_totals_linear %>%
 
 ### Mean of total amounts - linear scale
 
-```{r, eval = FALSE}
-bar_totals_linear %>%
-  dplyr::arrange(desc(mean_total)) %>%
-  ggplot(aes(x = class, y = mean_total, fill = condition)) + 
-  geom_bar(
-    colour = "black", 
-    position= position_dodge(width = 0.8),
-    width = 0.8,
-    stat="identity",
-    lwd = 0.8
-  ) + 
-  geom_errorbar(
-      aes(ymin=mean_total-se_total, ymax=mean_total+se_total), 
-      position = position_dodge(width = dodge_width), 
-      width = 0.25,
-      lwd = 0.8
-    ) +
-  scale_fill_manual(values = c("#9ac4d6", "#f7f7c3")) +
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 90, face = "bold")) +
-  xlab("")
-```
-
 ```{r, fig.width = 10, fig.height=8}
+dodge_width <- 0.8
 bar_totals_linear %>%
   left_join(superclasses) %>%
     ggplot(aes(x = class, y = mean_total, fill = condition)) + 
@@ -180,56 +151,18 @@ bar_totals_linear %>%
       lwd = 0.8
     ) + 
     geom_errorbar(
-        aes(ymin=mean_total-se_total, ymax=mean_total+se_total), 
-        position = position_dodge(width = dodge_width), 
+        aes(ymin=mean_total-se_total, ymax=mean_total+se_total),
+        position = position_dodge(width = dodge_width),
         width = 0.25,
         lwd = 0.8
       ) +
-    scale_fill_manual(values = c("#9ac4d6", "#f7f7c3")) +
+    scale_fill_manual(values = c("#9ac4d6", "#f7f7c3", "#a961e8")) +
     theme_minimal() +
     theme(axis.text.x = element_text(angle = 90, face = "bold")) +
     xlab("") +
     facet_wrap(~ superclass, scales = "free")
 ```
 
-```{r forest_class, fig.width = 10, fig.height=8}
-t_test_by_class %>%
-  left_join(superclasses) %>%
-  ggplot(aes(ratio, class)) +
-    geom_errorbar(aes(xmin=lower.limit, xmax=upper.limit), width = 0.5, lwd=0.8, show.legend=FALSE)+
-    geom_point(size=3, colour="darkred")+
-    geom_vline(xintercept=0, linetype="dashed", color = "red")+
-    scale_x_continuous(breaks=seq(from =-15, by=1, to=5)) +
-    facet_wrap(~ superclass, scales = "free")
-```
-
-```{r}
-#custom_forest(t_test_res, lipid_class, abundance_level = "high")
-```
-
- 
-```{r, eval = FALSE}
-### Totals - log2 scale  
-bar_totals_linear %>%
-  ggplot(aes(x = class, y = log2(mean_total), fill = condition)) + 
-  geom_bar(
-    colour = "black", 
-    position= position_dodge(width = 0.8),
-    width = 0.8,
-    stat="identity",
-    lwd = 0.8
-  ) + 
-  # geom_errorbar(
-  #     aes(ymin=log2(mean_total)-log2(se_total), ymax=log2(mean_total)+log2(se_total)), 
-  #     position = position_dodge(width = dodge_width), 
-  #     width = 0.25,
-  #     lwd = 0.8
-  #   ) +
-  scale_fill_manual(values = c("#9ac4d6", "#f7f7c3")) +
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 90, face = "bold")) +
-  xlab("")
-```
 
 ```{r, results="asis"}
 # doesn't work properly using headers as it messes up the tabs
@@ -273,7 +206,9 @@ lipid_labels <- create_lipid_class_labels(lipid_summary, nrow(df_lipids))
 lipid_colours <- create_lipid_colours(
   class_names = dplyr::pull(lipid_summary, class)
 )
-group_colours <- stats::setNames(c("blue", "darkgreen"), exp_conditions)
+#group_colours <- stats::setNames(c("blue", "darkgreen"), exp_conditions)
+
+group_colours <- stats::setNames(hcl.colors(length(exp_conditions)), exp_conditions)
 
 annot_colours <- list(
   condition = group_colours,
@@ -287,43 +222,6 @@ annot_colours <- list(
 <br>
 <br>  
   
-###  Volcano plot
-
-<div class = "row">
-<div class = "col-md-4">
-<br><br><br><br>
-The y axis shows the –log10(padj); that is the negative of the log-transformed p-values, 
-adjusted for multiple comparisons.
-The x axis shows the magnitude of difference between the conditions for that lipid, 
-expressed as a ratio.
-
-Each point on the plot is a lipid (subclass?).   
-Hover over a point to see the name.
-
-The dashed red line shows significance (p<0.05) i.e. any points above it represent 
-a significant difference between the 2 conditions.
-
-</div>
-<div class = "col-md-8">
-```{r, fig.height=5, fig.width=6}
-p <- t_test_res %>%
-  left_join(superclasses) %>%
-  ggplot(aes(x = ratio, y = -log10(padj), col = superclass, annotation = lipid_name)) +
-  geom_point() +
-  geom_hline(yintercept = -log10(0.05), col = "red", linetype = "dashed") +
-  geom_vline(xintercept = 0, linetype = "dashed", col = "grey") +
-  theme(legend.title = element_blank())
-
-plotly::ggplotly(p, tooltip = "lipid_name")
-```
-</div>
-</div>
-
-<br>
-<br>
-<hr class="style2">  
-<br>
-<br>
 
 ### Heatmaps
 
@@ -389,7 +287,7 @@ heatmap3
 
 ```
 
-```{r}
+```{r, eval = FALSE}
 pdf(file = paste0(params$output_folder, "/heatmap1.pdf"))
 heatmap1
 dev.off()
