@@ -143,12 +143,30 @@ bar_data_linear_median <- tidy_data %>%
 
 ```{r anova}
 
+
+## test with 3 species with no missing data ##
+tidy_data %>%
+  filter(lipid_name =="DG 32:1" |lipid_name == "DG 34:1" | lipid_name == "DG 34:2") %>%
+  group_by(lipid_name) %>%
+    rstatix::anova_test(log2_value ~ condition)
+
+## it works ##
+
+## now let's remove species with more than 2 NA per condition ##
+tidy_data %>%
+  filter(lipid_name =="DG 32:1" |lipid_name == "DG 34:1" | lipid_name == "DG 34:2" | lipid_name == "DG 32:0") -> tidy.sample
+
+tidy.sample %>%
+  group_by(lipid_name) %>%
+  summarise(na_count = sum(is.na(log2_value))) %>%
+  filter(na_count <= 1) %>%
+  left_join(tidy.sample) -> tidy.sample
+
+
 #### We need to use anova_test but we need to remove the species with too many the NA first: na> 3? ###
 anova_test_res <- tidy_data %>%
     rstatix::anova_test(log2_value ~ condition)
 
-#tidy_data %>%
-#  summarise(non_na_count = sum(is.na(log2_value)))
 
 ```
 
