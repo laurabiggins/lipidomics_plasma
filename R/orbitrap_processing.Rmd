@@ -43,6 +43,14 @@ meta_info <- process_metadata(metadata_file = params$metadata_file, control = pa
 
 exp_conditions <- pull(distinct(meta_info, condition))
 
+#TODO:
+## save pie chart as pdfs
+## "other" set as separate pie charts
+## pairwise SRM vs AA and SRM vs T1D
+## correlation matrix for pairwise comparisons
+## save data tables as csv in this and the other report
+## anova for higher level - at class level
+## effect of length 32:1 - length 32, double bond 1, pairwise.
 ```
 
 ```{r checks, include = FALSE}
@@ -182,8 +190,12 @@ sig_lipids <- anova_res[anova_res$p < 0.05, ] # tidyverse complains about the an
 # dplyr::filter(p < 0.05)
 ```
 
+We perform an anova on all the lipids to see if there is a difference between any of the conditions.  
+  
+## Table of lipids with anova results
+
 ```{r}
-sig_lipids %>%
+anova_res %>%
   DT::datatable(rownames = FALSE, options = list(pageLength = 10, dom = "tp"))
 ```
 

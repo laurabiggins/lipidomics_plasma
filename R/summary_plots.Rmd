@@ -162,6 +162,34 @@ bar_totals_linear %>%
 ```
 
 <br>
+
+```{r, fig.width = 10, fig.height=8}
+dodge_width <- 0.8
+bar_totals_linear %>%
+  left_join(superclasses) %>%
+    ggplot(aes(x = class, y = mean_total, fill = condition)) + 
+    geom_bar(
+      colour = "black", 
+      position= position_dodge(width = 0.8),
+      width = 0.8,
+      stat="identity",
+      lwd = 0.8
+    ) + 
+    geom_errorbar(
+        aes(ymin=mean_total-se_total, ymax=mean_total+se_total),
+        position = position_dodge(width = dodge_width),
+        width = 0.25,
+        lwd = 0.8
+      ) +
+    ylim(0, 3) +
+    scale_fill_manual(values = c("#9ac4d6", "#f7f7c3", "#a961e8")) +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 90, face = "bold")) +
+    xlab("") +
+    facet_wrap(~ superclass, scales = "free")
+```
+
+<br> 
 <hr class="style2">  
 <br> 
 
