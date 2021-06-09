@@ -178,27 +178,39 @@ anova_test_res <- tidy_data %>%
 
 # Anova on total class data 
 
-```{r}
-anova_res_class <- tidy_data %>%
+This doesn't work as residual df = 0
+
+```{r, eval = FALSE}
+classes <- tidy_data %>%
+  select(class, lipid_name) %>%
+  distinct()
+
+total_by_class <- tidy_data %>%
   group_by(class) %>%
   summarise(na_count = sum(is.na(log2_value))) %>%
   filter(na_count <= 1) %>%
   ungroup() %>%
   left_join(tidy_data) %>%
+  group_by(lipid_name, condition) %>%
+  summarise(total = sum(value)) %>%
+  ungroup() %>%
+  left_join(classes) %>%
+  mutate(log2_total = log2(total))
+
+  
+anova_res_class <- total_by_class %>%
   group_by(class) %>%
-  rstatix::anova_test(log2_value ~ condition) %>%
+  rstatix::anova_test(log2_total ~ condition) %>%
   ungroup()
 
 ```
 
-```{r}
-anova_res_class %>%
-  DT::datatable(rownames = FALSE, options = list(pageLength = 10, dom = "tp"))
-```
-
-```{r}
+```{r, eval = FALSE}
 outfile <- paste0(params$output_folder, "/all_anova_class_results.csv")
 readr::write_csv(anova_res_class, file = outfile)
+
+anova_res_class %>%
+  DT::datatable(rownames = FALSE, options = list(pageLength = 10, dom = "tp"))
 ```
 
 Changes at the class level are mostly not significant, so we'll do another anova 
@@ -241,13 +253,10 @@ readr::write_csv(anova_res, file = outfile)
 
 ## Checking chain length
 
-```{r, fig.width = 10, fig.height=10}
+```{r, fig.width = 10, fig.height=10, eval = FALSE}
 chain_data <- tidy_data %>%
   separate(col = lipid_name, into = c("lipid_name", "chain_length"), sep = " ") %>%
   separate(col = chain_length, into = c("chain_length", "double_bonds"), sep = ":", convert = TRUE) 
-
-# chain_data %>%
-#   count(double_bonds)
 
 chain_data %>%
   ggplot(aes(x = chain_length, y = log2_value, col = condition)) +
@@ -261,7 +270,7 @@ chain_data %>%
 
 ## Double bonds
 
-```{r, fig.width = 12, fig.height=10}
+```{r, fig.width = 12, fig.height=10, eval = FALSE}
 chain_data %>%
   ggplot(aes(x = double_bonds, y = log2_value, col = condition)) +
   geom_point(position= position_dodge(width = 0.5)) +
