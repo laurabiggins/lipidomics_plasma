@@ -116,7 +116,8 @@ All minimum skewness values are well above 1 so we'll log transform the data.
 ```{r}
 tidy_data <- tidy_data %>%
   dplyr::mutate(log2_value = log2(value)) %>%
-  na_if("-Inf")
+  na_if("-Inf") %>%
+  mutate(condition = fct_relevel(condition, "SRM"))
   #dplyr::mutate(log2_value = if_else(log2_value == "-Inf", 0, log2_value)) # we don't want -Inf values
 ```
 
@@ -178,9 +179,7 @@ anova_test_res <- tidy_data %>%
 
 # Anova on total class data 
 
-This doesn't work as residual df = 0
-
-```{r, eval = FALSE}
+```{r}
 classes <- tidy_data %>%
   select(class, lipid_name) %>%
   distinct()
@@ -191,21 +190,25 @@ total_by_class <- tidy_data %>%
   filter(na_count <= 1) %>%
   ungroup() %>%
   left_join(tidy_data) %>%
-  group_by(lipid_name, condition) %>%
+  group_by(class, condition, sample_name) %>%
   summarise(total = sum(value)) %>%
   ungroup() %>%
-  left_join(classes) %>%
   mutate(log2_total = log2(total))
 
-  
 anova_res_class <- total_by_class %>%
   group_by(class) %>%
   rstatix::anova_test(log2_total ~ condition) %>%
-  ungroup()
+  ungroup() %>%
+  as_tibble()
+
+sig_by_class <- anova_res_class %>%
+  select(class, p) %>%
+  right_join(total_by_class) %>%
+  filter(p < 0.05)
 
 ```
 
-```{r, eval = FALSE}
+```{r}
 outfile <- paste0(params$output_folder, "/all_anova_class_results.csv")
 readr::write_csv(anova_res_class, file = outfile)
 
@@ -213,23 +216,30 @@ anova_res_class %>%
   DT::datatable(rownames = FALSE, options = list(pageLength = 10, dom = "tp"))
 ```
 
-Changes at the class level are mostly not significant, so we'll do another anova 
-but this time at the individual lipid level.  
   
 ## Anova at individual lipid level
 
 ```{r}
-anova_res <- tidy_data %>%
+by_lipid_name <- tidy_data %>%
   group_by(lipid_name) %>%
   summarise(na_count = sum(is.na(log2_value))) %>%
   filter(na_count <= 1) %>%
   ungroup() %>%
-  left_join(tidy_data) %>%
+  left_join(tidy_data)
+
+anova_res <- by_lipid_name %>%
   group_by(lipid_name) %>%
   rstatix::anova_test(log2_value ~ condition) %>%
-  ungroup()
+  ungroup() %>%
+  as_tibble()
 
-sig_lipids <- anova_res[anova_res$p < 0.05, ] # tidyverse complains about the anova format so we'll go old school
+#sig_lipids <- anova_res[anova_res$p < 0.05, ] # tidyverse complains about the anova format so we'll go old school
+
+sig_lipids <- anova_res %>%
+  select(lipid_name, p) %>%
+  right_join(by_lipid_name) %>%
+  filter(p < 0.05)
+
 
 # dplyr::filter(p < 0.05)
 ```
@@ -246,31 +256,191 @@ outfile <- paste0(params$output_folder, "/all_anova_results.csv")
 readr::write_csv(anova_res, file = outfile)
 ```
 
+## Post hoc tests  
+
+We can run further tests on the lipids identified as changing significantly from the anova.
+
+### Tukey on total class data
+
+```{r}
+tukey_by_class <- sig_by_class %>%
+  group_by(class) %>%
+  rstatix::tukey_hsd(log2_total ~ condition) %>%
+  filter(group1 != "AA") %>%
+  ungroup() %>%
+  as_tibble()
+
+tukey_by_class %>%
+  ggplot(aes(class, estimate, ymin=conf.low, ymax=conf.high, fill=group2))+
+  geom_errorbar(colour="black", size=0.5, position=position_dodge(.9))+
+  geom_col(position = position_dodge(.9), colour="black")+
+  scale_fill_manual(values = c("#9ac4d6", "#f7f7c3")) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, face = "bold"))
+
+```
+
+### Tukey on individual lipid data
+
+```{r, fig.width = 10, fig.height=8}
+tukey_by_lipid <- sig_lipids %>%
+  group_by(lipid_name) %>%
+  rstatix::tukey_hsd(log2_value ~ condition) %>%
+  filter(!(group1 == "AA" & group2 == "T1D")) %>%
+  ungroup() %>%
+  as_tibble()
+
+classes <- select(sig_lipids, lipid_name, class)
+
+tukey_by_lipid %>%
+  left_join(classes) %>%
+  left_join(superclasses) %>%
+  ggplot(aes(lipid_name, estimate, ymin=conf.low, ymax=conf.high, fill=group2))+
+  geom_errorbar(colour="black", size=0.5, position=position_dodge(.9))+
+   geom_col(position = position_dodge(.9), colour="black")+
+  scale_fill_manual(values = c("#9ac4d6", "#f7f7c3")) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, face = "bold")) +
+  #facet_wrap(~ superclass, scales = "free") +
+  facet_wrap(~ class, scales = "free")
+
+# tukey_by_lipid %>%
+#   left_join(classes) %>%
+#   filter(p.adj < 0.05) %>%
+#   ggplot(aes(lipid_name, estimate, ymin=conf.low, ymax=conf.high, fill=group2))+
+#   geom_errorbar(colour="black", size=0.5, position=position_dodge(.9))+
+#    geom_col(position = position_dodge(.9), colour="black")+
+#   scale_fill_manual(values = c("#9ac4d6", "#f7f7c3")) +
+#   theme_minimal() +
+#   theme(axis.text.x = element_text(angle = 90, face = "bold")) +
+#   facet_wrap(~ class, scales = "free")
+
+```
+
+
 ## Summary
 
 ```{r, child='summary_plots.Rmd'}
 ```
 
-## Checking chain length
+### Chain length and double bonds
 
-```{r, fig.width = 10, fig.height=10, eval = FALSE}
-chain_data <- tidy_data %>%
-  separate(col = lipid_name, into = c("lipid_name", "chain_length"), sep = " ") %>%
-  separate(col = chain_length, into = c("chain_length", "double_bonds"), sep = ":", convert = TRUE) 
+The total amount of lipid varies quite significantly between conditions, so if 
+we're comparing amounts between different conditions we should probably normalise
+to the largest amount.
 
-chain_data %>%
-  ggplot(aes(x = chain_length, y = log2_value, col = condition)) +
-  geom_point(position= position_dodge(width = 0.5)) +
-  #geom_point(position= position_dodge(width = 0.5), aes(shape = double_bonds)) +
-  #scale_fill_manual(values = c("#9ac4d6", "#f7f7c3", "#a961e8")) +
-  scale_color_manual(values = c("#9ac4d6", "#07634b", "#a961e8")) +
-  theme_minimal() +
-  facet_wrap(~class, scales = "free") 
+```{r}
+condition_totals <- tidy_data %>%
+  group_by(condition) %>%
+  summarise(total = sum(value)) %>%
+  mutate(scale_factor = max(total)/total)
+
+DT::datatable(condition_totals, rownames = FALSE, options = list(dom = "t"))
 ```
 
-## Double bonds
+
+```{r}
+chain_data <- tidy_data %>%
+  group_by(lipid_name, condition) %>%
+  summarise(total_value = sum(value)) %>%
+  ungroup() %>%
+  separate(col = lipid_name, into = c("lipid_name", "chain_length"), sep = " ") %>%
+  separate(col = chain_length, into = c("chain_length", "double_bonds"), sep = ":", convert = TRUE)
+
+chain_data_all <- tidy_data %>%
+  separate(col = lipid_name, into = c("lipid_name", "chain_length"), sep = " ") %>%
+  separate(col = chain_length, into = c("chain_length", "double_bonds"), sep = ":", convert = TRUE) %>%
+  group_by(condition, chain_length, double_bonds) %>%
+  summarise(total_value = sum(value)) %>%
+  ungroup()
+  
+chain_data_all_norm <- chain_data_all %>%
+  left_join(condition_totals) %>%
+  mutate(scaled_value = total_value * scale_factor)
+
+chain_data_norm <- chain_data %>%
+  left_join(condition_totals) %>%
+  mutate(scaled_value = total_value * scale_factor) %>%
+  mutate(log2_scaled = log2(scaled_value))
+```
+
+## All classes grouped together, scaled
+```{r, fig.width = 10, fig.height=4}
+chain_data_all_norm %>%
+  drop_na() %>%
+  ggplot(aes(x = chain_length, y = double_bonds, col = scaled_value, size = scaled_value)) +
+  geom_point(position= position_dodge(width = 0.5), aes()) +
+  scale_colour_viridis_b(direction = -1) +
+  facet_wrap(~condition, scales = "free") 
+```
+
+
+## All classes grouped together, unscaled
+
+```{r, fig.width = 10, fig.height=4}
+chain_data_all %>%
+  drop_na() %>%
+  ggplot(aes(x = chain_length, y = double_bonds, col = total_value, size = total_value)) +
+  geom_point(position= position_dodge(width = 0.5), aes()) +
+  scale_colour_viridis_b(direction = -1) +
+  facet_wrap(~condition, scales = "free") 
+```
+
+
+### TG - scaled values between conditions, linear 
+
+```{r, fig.width = 10, fig.height=4}
+chain_data_norm %>%
+  drop_na() %>%
+  filter(lipid_name == "TG") %>%
+  #ggplot(aes(x = chain_length, y = double_bonds, col = log2_scaled, size = log2_scaled)) +
+  ggplot(aes(x = chain_length, y = double_bonds, col = scaled_value, size = scaled_value)) +
+  geom_point(position= position_dodge(width = 0.5), aes()) +
+  scale_colour_viridis_b(direction = -1) +
+  facet_wrap(~condition, scales = "free") 
+```
+
+
+```{r, fig.width = 10, fig.height=4, eval = FALSE}
+# ### TG - scaled values between conditions, log2
+chain_data_norm %>%
+  drop_na() %>%
+  filter(lipid_name == "TG") %>%
+  ggplot(aes(x = chain_length, y = double_bonds, col = log2_scaled, size = log2_scaled)) +
+  geom_point(position= position_dodge(width = 0.5), aes()) +
+  scale_colour_viridis_b(direction = -1) +
+  facet_wrap(~condition, scales = "free") 
+```
+
+### TG - unscaled, linear 
+
+```{r, fig.width = 10, fig.height=4}
+chain_data %>%
+  drop_na() %>%
+  #mutate(log2_value = log2(total_value)) %>%
+  filter(lipid_name == "TG") %>%
+  ggplot(aes(x = chain_length, y = double_bonds, col = total_value, size = total_value)) +
+  geom_point(position= position_dodge(width = 0.5), aes()) +
+  scale_colour_viridis_b(direction = -1) +
+  facet_wrap(~condition, scales = "free") 
+
+```
+
+## All classes - chain length and double bonds (scaled values)
+
+```{r, fig.width = 12, fig.height=40}
+chain_data_norm %>%
+  drop_na() %>%
+  ggplot(aes(x = chain_length, y = double_bonds, col = scaled_value, size = scaled_value)) +
+  geom_point(position= position_dodge(width = 0.5), aes()) +
+  scale_colour_viridis_b(direction = -1) +
+  facet_grid(vars(lipid_name), vars(condition), scales = "free") 
+```
+
+
 
 ```{r, fig.width = 12, fig.height=10, eval = FALSE}
+## Double bonds
 chain_data %>%
   ggplot(aes(x = double_bonds, y = log2_value, col = condition)) +
   geom_point(position= position_dodge(width = 0.5)) +
